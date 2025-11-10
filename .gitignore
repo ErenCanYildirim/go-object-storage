@@ -18,10 +18,6 @@ Godeps/
 go.work
 go.work.sum
 
-# Compiled binary (if built at root)
-main
-app
-server
 
 # Logs
 *.log
