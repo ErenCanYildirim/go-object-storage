@@ -38,6 +38,9 @@ E.g.
 
 upon deleting object A only Chunk1 is deleted.
 
+The system has compression capabilities, which can be set to false in the docker-compose environment file. By default it is however true.
+Gzip is used for compression.
+
 ## Quick start
 
 This is open to adapting it for your own needs.
@@ -162,6 +165,8 @@ chunks
     - size (bigint)
     - minio_key (varchar, unique)
     - reference_count (int)
+    - is_compressed BOOLEAN DEFAULT false,
+    - original_size BIGINT,
     - created_at
 
 object_chunks
@@ -205,4 +210,3 @@ Potential enhancements for the future are:
     - multipart uploads
     - streaming
     - versioning
-    - compression

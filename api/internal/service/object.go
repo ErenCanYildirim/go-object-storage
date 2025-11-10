@@ -39,104 +39,113 @@ func NewObjectService(
 	}
 }
 
+// NOTE: this method needs refactoring
 func (s *ObjectService) PutObject(ctx context.Context, bucketName, key string, reader io.Reader, size int64, contentType string) (*models.Object, error) {
-	// Get bucket
 	bucket, err := s.bucketRepo.GetByName(ctx, bucketName)
 	if err != nil {
-		return nil, fmt.Errorf("bucket not found: %w", err)
+		return nil, fmt.Errorf("bucket not found %w", err)
 	}
 
-	// Read entire file into memory for chunking
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// Calculate overall ETag
+	originalSize := int64(len(data))
+
+	shouldCompress := s.cfg.EnableCompression && shouldCompress(contentType)
+
 	etag := calculateMD5(data)
 
-	// Create object in database
-	object, err := s.objectRepo.Create(ctx, bucket.ID, key, int64(len(data)), contentType, etag)
+	object, err := s.objectRepo.Create(ctx, bucket.ID, key, originalSize, contentType, etag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create object: %w", err)
 	}
 
-	// Chunk the data
 	chunks := chunkData(data, s.cfg.ChunkSize)
 
-	// Store each chunk with deduplication
 	for index, chunkData := range chunks {
+		originalChunkSize := int64(len(chunkData))
+		isCompressed := false
+
+		if shouldCompress {
+			compressed, err := compress(chunkData, s.cfg.CompressionLevel)
+			if err == nil && len(compressed) < len(chunkData) {
+				chunkData = compressed
+				isCompressed = true
+			}
+		}
+
+		//hashing is done after compression so the deduplication works on compressed chunks
 		chunkHash := calculateSHA256(chunkData)
 
-		// Check if chunk already exists
 		existingChunk, err := s.chunkRepo.GetByHash(ctx, chunkHash)
 		if err != nil {
-			// Rollback object creation
+			//rollback
 			_ = s.objectRepo.Delete(ctx, bucket.ID, key)
 			return nil, fmt.Errorf("failed to check chunk: %w", err)
 		}
 
 		var chunk *models.Chunk
 		if existingChunk != nil {
-			// Chunk exists, reuse it
+			//reuse existing chunk
 			chunk = existingChunk
 		} else {
-			// New chunk, store it in MinIO
+			//new chunk is stored
 			minioKey := s.storage.GenerateChunkKey()
 			err = s.storage.PutChunk(ctx, minioKey, bytes.NewReader(chunkData), int64(len(chunkData)), "application/octet-stream")
+
 			if err != nil {
-				// Rollback
+				//rollback
 				_ = s.objectRepo.Delete(ctx, bucket.ID, key)
 				return nil, fmt.Errorf("failed to store chunk: %w", err)
 			}
 
-			// Create chunk record
-			chunk, err = s.chunkRepo.Create(ctx, chunkHash, int64(len(chunkData)), minioKey)
+			//creation of a chunk record with the info on compression
+			chunk, err = s.chunkRepo.Create(ctx, chunkHash, int64(len(chunkData)), minioKey, isCompressed, originalChunkSize)
 			if err != nil {
-				// Rollback
+				//rollback
 				_ = s.storage.DeleteChunk(ctx, minioKey)
 				_ = s.objectRepo.Delete(ctx, bucket.ID, key)
 				return nil, fmt.Errorf("failed to create chunk record: %w", err)
 			}
 		}
 
-		// Link chunk to object
+		//link the chunk to the object
 		if err := s.chunkRepo.CreateObjectChunk(ctx, object.ID, chunk.ID, index); err != nil {
 			// Rollback
 			_ = s.objectRepo.Delete(ctx, bucket.ID, key)
 			return nil, fmt.Errorf("failed to link chunk: %w", err)
 		}
 
-		// Increment reference count
+		//increment the reference count
 		if err := s.chunkRepo.IncrementReference(ctx, chunk.ID); err != nil {
 			return nil, fmt.Errorf("failed to increment reference: %w", err)
 		}
 	}
-
 	return object, nil
 }
 
 func (s *ObjectService) GetObject(ctx context.Context, bucketName, key string) (io.Reader, *models.Object, error) {
-
 	bucket, err := s.bucketRepo.GetByName(ctx, bucketName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("bucket not found: %w", err)
 	}
 
+	//metadata of object retrieval
 	object, err := s.objectRepo.GetByKey(ctx, bucket.ID, key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("object not found: %w", err)
+		return nil, nil, fmt.Errorf("object not found %w", err)
 	}
 
-	//retrieving all chunks for that object
+	//all chunks belonging to that object
 	chunks, err := s.chunkRepo.GetObjectChunks(ctx, object.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get chunks: %w", err)
 	}
 
+	//assembling the chunks
 	var buffer bytes.Buffer
-	//reassembling the chunks
-
 	for _, chunk := range chunks {
 		chunkReader, err := s.storage.GetChunk(ctx, chunk.MinioKey)
 		if err != nil {
@@ -144,10 +153,23 @@ func (s *ObjectService) GetObject(ctx context.Context, bucketName, key string) (
 		}
 		defer chunkReader.Close()
 
-		if _, err := io.Copy(&buffer, chunkReader); err != nil {
+		chunkData, err := io.ReadAll(chunkReader)
+		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read chunk: %w", err)
 		}
+
+		if chunk.IsCompressed {
+			chunkData, err = decompress(chunkData)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to decompress chunk: %w", err)
+			}
+		}
+
+		if _, err := buffer.Write(chunkData); err != nil {
+			return nil, nil, fmt.Errorf("failed to write chunk: %w", err)
+		}
 	}
+
 	return &buffer, object, nil
 }
 

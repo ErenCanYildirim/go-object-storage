@@ -19,15 +19,15 @@ func NewChunkRepository(db *database.DB) *ChunkRepository {
 	return &ChunkRepository{db: db}
 }
 
-func (r *ChunkRepository) Create(ctx context.Context, hash string, size int64, minioKey string) (*models.Chunk, error) {
+func (r *ChunkRepository) Create(ctx context.Context, hash string, size int64, minioKey string, isCompressed bool, originalSize int64) (*models.Chunk, error) {
 	chunk := &models.Chunk{}
 	query := `
-		INSERT INTO chunks (hash, size, minio_key, reference_count)
-		VALUES ($1, $2, $3, 0)
-		RETURNING id, hash, size, minio_key, reference_count, created_at
+		INSERT INTO chunks (hash, size, minio_key, reference_count, is_compressed, original_size)
+		VALUES ($1, $2, $3, 0, $4, $5)
+		RETURNING id, hash, size, minio_key, reference_count, created_at, is_compressed, original_size
 	`
-	err := r.db.QueryRowContext(ctx, query, hash, size, minioKey).Scan(
-		&chunk.ID, &chunk.Hash, &chunk.Size, &chunk.MinioKey, &chunk.ReferenceCount, &chunk.CreatedAt,
+	err := r.db.QueryRowContext(ctx, query, hash, size, minioKey, isCompressed, originalSize).Scan(
+		&chunk.ID, &chunk.Hash, &chunk.Size, &chunk.MinioKey, &chunk.ReferenceCount, &chunk.CreatedAt, &chunk.IsCompressed, &chunk.OriginalSize,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chunk: %w", err)
@@ -38,15 +38,15 @@ func (r *ChunkRepository) Create(ctx context.Context, hash string, size int64, m
 func (r *ChunkRepository) GetByHash(ctx context.Context, hash string) (*models.Chunk, error) {
 	chunk := &models.Chunk{}
 	query := `
-		SELECT id, hash, size, minio_key, reference_count, created_at
+		SELECT id, hash, size, minio_key, reference_count, created_at, is_compressed, original_size
 		FROM chunks
 		WHERE hash = $1
 	`
 	err := r.db.QueryRowContext(ctx, query, hash).Scan(
-		&chunk.ID, &chunk.Hash, &chunk.Size, &chunk.MinioKey, &chunk.ReferenceCount, &chunk.CreatedAt,
+		&chunk.ID, &chunk.Hash, &chunk.Size, &chunk.MinioKey, &chunk.ReferenceCount, &chunk.CreatedAt, &chunk.IsCompressed, &chunk.OriginalSize,
 	)
 	if err == sql.ErrNoRows {
-		return nil, nil // Not an error, chunk just doesn't exist
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chunk: %w", err)
@@ -109,7 +109,7 @@ func (r *ChunkRepository) CreateObjectChunk(ctx context.Context, objectID, chunk
 
 func (r *ChunkRepository) GetObjectChunks(ctx context.Context, objectID uuid.UUID) ([]models.Chunk, error) {
 	query := `
-		SELECT c.id, c.hash, c.size, c.minio_key, c.reference_count, c.created_at
+		SELECT c.id, c.hash, c.size, c.minio_key, c.reference_count, c.created_at, c.is_compressed, c.original_size
 		FROM chunks c
 		INNER JOIN object_chunks oc ON c.id = oc.chunk_id
 		WHERE oc.object_id = $1
@@ -124,7 +124,7 @@ func (r *ChunkRepository) GetObjectChunks(ctx context.Context, objectID uuid.UUI
 	chunks := []models.Chunk{}
 	for rows.Next() {
 		var chunk models.Chunk
-		if err := rows.Scan(&chunk.ID, &chunk.Hash, &chunk.Size, &chunk.MinioKey, &chunk.ReferenceCount, &chunk.CreatedAt); err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.Hash, &chunk.Size, &chunk.MinioKey, &chunk.ReferenceCount, &chunk.CreatedAt, &chunk.IsCompressed, &chunk.OriginalSize); err != nil {
 			return nil, fmt.Errorf("failed to scan chunk: %w", err)
 		}
 		chunks = append(chunks, chunk)

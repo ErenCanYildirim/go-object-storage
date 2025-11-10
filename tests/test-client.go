@@ -134,8 +134,17 @@ func main() {
 		fmt.Println("Passed\n")
 	}
 
+	// Test 11: Compression test
+	fmt.Println("Test 11: Compression test")
+	if err := testCompression(); err != nil {
+		fmt.Printf("Failed: %v\n\n", err)
+	} else {
+		fmt.Println("Passed\n")
+	}
+
 	fmt.Println("=====================================")
 	fmt.Println("All tests completed!")
+
 }
 
 // Test functions
@@ -325,6 +334,47 @@ func testDeleteBucket(bucket string) error {
 	}
 
 	fmt.Printf("   Deleted bucket: %s\n", bucket)
+	return nil
+}
+
+func testCompression() error {
+	compBucket := "compression-test"
+	reqBody := CreateBucketRequest{Name: compBucket}
+	jsonData, _ := json.Marshal(reqBody)
+	resp, _ := http.Post(baseURL+"/buckets", "application/json", bytes.NewBuffer(jsonData))
+	resp.Body.Close()
+
+	//repeated test for high compressibility
+	compressibleContent := []byte("This is repeated text that compresses very well! " +
+		"Lorem ipsum dolor sit amet, consectetur adipiscing elit. " +
+		"The quick brown fox jumps over the lazy dog. ")
+
+	//Repeats the content so we get to 5KB to compress it
+	fullContent := bytes.Repeat(compressibleContent, 30)
+
+	fmt.Printf("Original size: %d bytes\n", len(fullContent))
+
+	if err := testUploadFile(compBucket, "compressible.txt", fullContent); err != nil {
+		return err
+	}
+
+	randomContent := make([]byte, 5000)
+	for i := range randomContent {
+		randomContent[i] = byte(i % 256)
+	}
+	if err := testUploadFile(compBucket, "random.bin", randomContent); err != nil {
+		return err
+	}
+
+	fmt.Println("Uploaded compressible (text) and non-compressible (binary) files")
+	fmt.Println("Check compression stats:")
+	fmt.Println(`docker exec -it go-object-storage-postgres-1 psql -U objectstore -c "SELECT is_compressed, COUNT(*) as chunks, pg_size_pretty(SUM(size)) as stored, pg_size_pretty(SUM(original_size)) as original FROM chunks GROUP BY is_compressed;"`)
+
+	// Clean up
+	testDeleteObject(compBucket, "compressible.txt")
+	testDeleteObject(compBucket, "random.bin")
+	testDeleteBucket(compBucket)
+
 	return nil
 }
 

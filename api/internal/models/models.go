@@ -31,6 +31,8 @@ type Chunk struct {
 	MinioKey       string    `json:"minio_key"`
 	ReferenceCount int       `json:"reference_count"`
 	CreatedAt      time.Time `json:"created_at"`
+	IsCompressed   bool      `json:"is_compressed"`
+	OriginalSize   int64     `json:"original_size"`
 }
 
 type ObjectChunk struct {
