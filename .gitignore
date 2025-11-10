@@ -1,0 +1,64 @@
+# ---> Go
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove if you vendored your dependencies)
+vendor/
+Godeps/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Compiled binary (if built at root)
+main
+app
+server
+
+# Logs
+*.log
+
+# ---> IDEs and editors
+# VS Code
+.vscode/
+.history/
+*.code-workspace
+
+# JetBrains (GoLand)
+.idea/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Emacs
+*~
+
+# Vim
+*.swp
+*.swo
+*.un~
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---> Misc
+.env
+.env.*
+*.local
