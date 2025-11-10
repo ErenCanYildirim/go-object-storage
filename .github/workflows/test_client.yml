@@ -1,0 +1,92 @@
+name: Test Client
+
+on:
+    push:
+        branches: [ main, develop ]
+    pull_request:
+        branches: [ main, develop ]
+
+jobs:
+    test-client:
+        name: Run Test Client
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Start All Services  
+              run: |
+                docker-compose up -d
+                echo "Waiting for services to initialize..."
+                sleep 40
+
+            - name: Check Service Health
+              run: |
+                echo "Checking API health..."
+                for i in {1..10}; do 
+                    if curl -f http://localhost:8080/health; then
+                        echo "API is healthy"
+                        break
+                    fi
+                    echo "Waiting for API... ($i/10)"
+                    sleep 3
+                done 
+            
+            - name: Set up Go 
+              uses: actions/setup-go@v4
+              with:
+                go-version: 1.25
+
+            - name: Run Test Client
+              working-directory: ./tests
+              run: |
+                echo "Running comprehensive test suite..."
+                go run test-client.go
+
+            - name: Check Compression stats
+              run: |
+                echo "Compression statistics"
+                docker exec go-object-storage-postgres-1 psql -U objectstorage -c "
+                    SELECT
+                        is_compressed,
+                        COUNT(*) as chunks,
+                        pg_size_pretty(SUM(size)) as stored,
+                        pg_size_pretty(SUM(original_size)) as original,
+                        ROUND(100.0 * (1 - SUM(size)::numeric / NULLIF(SUM(original_size), 0)), 1) AS savings
+                
+                    FROM chunks
+                    GROUP BY is_compressed
+                    ORDER BY is_compressed DESC;
+                " || echo "No compression data yet"
+
+
+            - name: Check Deduplication status
+              run: |
+                echo "Deduplication Statistics:"
+                docker exec go-object-storage-postgres-1 psql -U objectstore -c "
+                    SELECT
+                        COUNT(*) as unique_chunks,
+                        SUM(reference_count) as total_refs,
+                        pg_size_pretty(SUM(size)) as storage_used
+                    FROM chunks;
+                " || echo "No deduplication data yet"
+
+            - name: View service logs on failure
+              if: failure()
+              run: |
+                echo "API logs:"
+                docker-compose logs api
+                echo ""
+                echo "PostgreSQL logs:"
+                docker-compose logs postgres
+                echo ""
+                echo "MinIO logs:"
+                docker-compose logs minio
+
+            - name: Cleanup
+              if: always()
+              run: docker-compose down -v
